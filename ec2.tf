@@ -27,33 +27,70 @@ resource "local_file" "prod_bastion_pem" {
 }
 
 # Security Group for bastion/test instance
-# tfsec:ignore=aws-ec2-no-public-ingress-sgr - SSH access from anywhere is intentional for testing bastion
-# tfsec:ignore=aws-ec2-no-public-egress-sgr - Outbound internet required for package managers and Docker
 resource "aws_security_group" "prod_bastion" {
   name_prefix = "iba-prod-bastion-"
   description = "Security group for IBA prod bastion/test instance - testing only, restrict in production"
   vpc_id      = aws_vpc.prod.id
 
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "SSH from anywhere - testing only, restrict in production"
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "All outbound traffic - required for Docker and package manager"
-  }
-
   tags = merge(
     var.common_tags,
     {
       Name        = "iba-prod-bastion-sg"
+      Environment = "prod"
+    }
+  )
+}
+
+#tfsec:ignore:aws-ec2-no-public-ingress-sgr SSH access from anywhere is intentional for testing bastion
+resource "aws_security_group_rule" "prod_bastion_ssh_ingress" {
+  type              = "ingress"
+  from_port         = 22
+  to_port           = 22
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  description       = "SSH from anywhere - testing only, restrict in production"
+  security_group_id = aws_security_group.prod_bastion.id
+}
+
+#tfsec:ignore:aws-ec2-no-public-egress-sgr Outbound internet required for package managers and Docker
+resource "aws_security_group_rule" "prod_bastion_all_egress" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  description       = "All outbound traffic - required for Docker and package manager"
+  security_group_id = aws_security_group.prod_bastion.id
+}
+
+resource "aws_security_group_rule" "prod_bastion_mongodb_ingress" {
+  for_each = toset(var.mongodb_access_cidrs)
+
+  type              = "ingress"
+  from_port         = var.mongodb_port
+  to_port           = var.mongodb_port
+  protocol          = "tcp"
+  cidr_blocks       = [each.value]
+  description       = "MongoDB access from approved CIDR"
+  security_group_id = aws_security_group.prod_bastion.id
+}
+
+resource "random_password" "mongodb_root" {
+  length  = 32
+  special = true
+}
+
+resource "aws_ssm_parameter" "mongodb_root_password" {
+  name        = var.mongodb_password_ssm_parameter_name
+  description = "MongoDB root password for containerized MongoDB on bastion host"
+  type        = "SecureString"
+  key_id      = aws_kms_key.main.arn
+  value       = random_password.mongodb_root.result
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name        = "${var.project_name}-mongodb-root-password"
       Environment = "prod"
     }
   )
@@ -109,9 +146,31 @@ resource "aws_iam_role_policy" "prod_bastion" {
             "aws:ResourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
+      },
+      {
+        Sid    = "ReadMongoDBPasswordFromParameterStore"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.mongodb_password_ssm_parameter_name}"
+      },
+      {
+        Sid    = "DecryptMongoDBPassword"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = aws_kms_key.main.arn
       }
     ]
   })
+}
+
+resource "aws_iam_role_policy_attachment" "prod_bastion_ssm_core" {
+  role       = aws_iam_role.prod_bastion.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 # IAM instance profile
@@ -147,7 +206,13 @@ resource "aws_launch_template" "prod_bastion" {
   }
 
   user_data = base64encode(templatefile("${path.module}/user_data.sh", {
-    docker_enabled = true
+    aws_region                 = var.aws_region
+    mongodb_image              = var.mongodb_image
+    mongodb_container_name     = var.mongodb_container_name
+    mongodb_username           = var.mongodb_username
+    mongodb_port               = var.mongodb_port
+    mongodb_data_dir           = var.mongodb_data_dir
+    mongodb_password_parameter = aws_ssm_parameter.mongodb_root_password.name
   }))
 
   monitoring {

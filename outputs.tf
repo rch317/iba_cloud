@@ -116,3 +116,18 @@ output "prod_bastion_ssh_command" {
   description = "SSH command to connect to the bastion instance"
   value       = "ssh -i ${local_file.prod_bastion_pem.filename} ec2-user@${aws_eip.prod_bastion.public_ip}"
 }
+
+output "mongodb_password_ssm_parameter_name" {
+  description = "SSM Parameter Store name containing MongoDB root password"
+  value       = aws_ssm_parameter.mongodb_root_password.name
+}
+
+output "mongodb_ssm_port_forward_command" {
+  description = "Start an SSM port-forward session from localhost to MongoDB on the EC2 host"
+  value       = "aws ssm start-session --target ${aws_instance.prod_bastion.id} --region ${var.aws_region} --document-name AWS-StartPortForwardingSession --parameters '{\"portNumber\":[\"${var.mongodb_port}\"],\"localPortNumber\":[\"${var.mongodb_port}\"]}'"
+}
+
+output "mongodb_local_connection_string" {
+  description = "Connection string after starting SSM port forwarding and retrieving password from SSM"
+  value       = "mongodb://${var.mongodb_username}:<password>@127.0.0.1:${var.mongodb_port}/?authSource=admin"
+}

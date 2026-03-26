@@ -64,3 +64,50 @@ variable "bastion_instance_type" {
     error_message = "bastion_instance_type must be a t3 instance type (micro, small, medium, or large)."
   }
 }
+
+variable "mongodb_image" {
+  description = "MongoDB container image to run on the bastion/test host"
+  type        = string
+  default     = "mongo:7"
+}
+
+variable "mongodb_container_name" {
+  description = "Container name for MongoDB"
+  type        = string
+  default     = "mongodb"
+}
+
+variable "mongodb_username" {
+  description = "Root username for MongoDB"
+  type        = string
+  default     = "mongodb_admin"
+}
+
+variable "mongodb_port" {
+  description = "Port to expose MongoDB on the EC2 host"
+  type        = number
+  default     = 27017
+
+  validation {
+    condition     = var.mongodb_port >= 1 && var.mongodb_port <= 65535
+    error_message = "mongodb_port must be between 1 and 65535."
+  }
+}
+
+variable "mongodb_data_dir" {
+  description = "Host path for MongoDB persistent data"
+  type        = string
+  default     = "/opt/mongodb/data"
+}
+
+variable "mongodb_access_cidrs" {
+  description = "CIDR blocks allowed to access MongoDB directly (leave empty to use SSM port forwarding only)"
+  type        = list(string)
+  default     = []
+}
+
+variable "mongodb_password_ssm_parameter_name" {
+  description = "SSM Parameter Store name for MongoDB root password"
+  type        = string
+  default     = "/iba/prod/mongodb/root_password"
+}

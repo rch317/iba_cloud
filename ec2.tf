@@ -146,12 +146,6 @@ resource "aws_launch_template" "prod_bastion" {
     name = aws_iam_instance_profile.prod_bastion.name
   }
 
-  network_interfaces {
-    associate_public_ip_address = true
-    security_groups             = [aws_security_group.prod_bastion.id]
-    delete_on_termination       = true
-  }
-
   user_data = base64encode(templatefile("${path.module}/user_data.sh", {
     docker_enabled = true
   }))
@@ -200,9 +194,11 @@ resource "aws_instance" "prod_bastion" {
     version = "$Latest"
   }
 
-  subnet_id            = aws_subnet.prod_public[data.aws_availability_zones.available.names[0]].id
-  key_name             = aws_key_pair.prod_bastion.key_name
-  iam_instance_profile = aws_iam_instance_profile.prod_bastion.name
+  subnet_id                   = aws_subnet.prod_public[data.aws_availability_zones.available.names[0]].id
+  vpc_security_group_ids      = [aws_security_group.prod_bastion.id]
+  key_name                    = aws_key_pair.prod_bastion.key_name
+  iam_instance_profile        = aws_iam_instance_profile.prod_bastion.name
+  associate_public_ip_address = true
 
   # Override metadata options for IMDS token requirement
   metadata_options {

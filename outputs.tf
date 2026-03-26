@@ -80,3 +80,39 @@ output "prod_internet_gateway_id" {
   description = "ID of the prod internet gateway"
   value       = aws_internet_gateway.prod.id
 }
+
+output "prod_bastion_instance_id" {
+  description = "Instance ID of the prod bastion/test instance"
+  value       = aws_instance.prod_bastion.id
+}
+
+output "prod_bastion_public_ip" {
+  description = "Public IP address of the prod bastion instance"
+  value       = aws_eip.prod_bastion.public_ip
+}
+
+output "prod_bastion_private_ip" {
+  description = "Private IP address of the prod bastion instance"
+  value       = aws_instance.prod_bastion.private_ip
+}
+
+output "prod_bastion_key_name" {
+  description = "Name of the SSH key pair for the bastion instance"
+  value       = aws_key_pair.prod_bastion.key_name
+}
+
+output "prod_bastion_key_file" {
+  description = "Path to the private key file (save this for SSH access)"
+  value       = local_file.prod_bastion_pem.filename
+  sensitive   = true
+}
+
+output "prod_bastion_security_group_id" {
+  description = "Security group ID for the bastion instance"
+  value       = aws_security_group.prod_bastion.id
+}
+
+output "prod_bastion_ssh_command" {
+  description = "SSH command to connect to the bastion instance"
+  value       = "ssh -i ${local_file.prod_bastion_pem.filename} ec2-user@${aws_eip.prod_bastion.public_ip}"
+}

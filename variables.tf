@@ -53,3 +53,14 @@ variable "prod_subnet_az_count" {
     error_message = "prod_subnet_az_count must be at least 3."
   }
 }
+
+variable "bastion_instance_type" {
+  description = "EC2 instance type for bastion/test instance"
+  type        = string
+  default     = "t3.micro"
+
+  validation {
+    condition     = can(regex("^t3\\.(micro|small|medium|large)", var.bastion_instance_type))
+    error_message = "bastion_instance_type must be a t3 instance type (micro, small, medium, or large)."
+  }
+}

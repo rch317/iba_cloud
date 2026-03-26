@@ -131,3 +131,28 @@ output "mongodb_local_connection_string" {
   description = "Connection string after starting SSM port forwarding and retrieving password from SSM"
   value       = "mongodb://${var.mongodb_username}:<password>@127.0.0.1:${var.mongodb_port}/?authSource=admin"
 }
+
+output "iba_orders_ssm_document_name" {
+  description = "SSM document name to run iba_orders sync job"
+  value       = aws_ssm_document.iba_orders_sync.name
+}
+
+output "iba_orders_run_now_command" {
+  description = "Run iba_orders sync job immediately via SSM"
+  value       = "aws ssm send-command --document-name ${aws_ssm_document.iba_orders_sync.name} --instance-ids ${aws_instance.prod_bastion.id} --region ${var.aws_region} --comment 'Run iba_orders sync'"
+}
+
+output "iba_orders_api_key_ssm_parameter_name" {
+  description = "SSM Parameter Store name for iba_orders API key"
+  value       = aws_ssm_parameter.iba_orders_api_key.name
+}
+
+output "iba_orders_env_file_ssm_parameter_name" {
+  description = "SSM Parameter Store name for full iba_orders .env content"
+  value       = var.iba_orders_env_file_ssm_parameter_name
+}
+
+output "iba_orders_google_credentials_ssm_parameter_name" {
+  description = "SSM Parameter Store name for optional Google credentials JSON"
+  value       = var.iba_orders_google_credentials_ssm_parameter_name
+}

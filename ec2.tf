@@ -96,6 +96,44 @@ resource "aws_ssm_parameter" "mongodb_root_password" {
   )
 }
 
+resource "aws_ssm_parameter" "iba_orders_api_key" {
+  name        = var.iba_orders_api_key_ssm_parameter_name
+  description = "Squarespace API key for iba_orders container job"
+  type        = "SecureString"
+  key_id      = aws_kms_key.main.arn
+  value       = var.iba_orders_api_key != "" ? var.iba_orders_api_key : "REPLACE_ME"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name        = "${var.project_name}-iba-orders-api-key"
+      Environment = "prod"
+    }
+  )
+}
+
+resource "aws_ssm_parameter" "iba_orders_google_credentials_json" {
+  count = var.iba_orders_google_credentials_json != "" ? 1 : 0
+
+  name        = var.iba_orders_google_credentials_ssm_parameter_name
+  description = "Google service-account JSON for iba_orders"
+  type        = "SecureString"
+  key_id      = aws_kms_key.main.arn
+  value       = var.iba_orders_google_credentials_json
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name        = "${var.project_name}-iba-orders-google-creds"
+      Environment = "prod"
+    }
+  )
+}
+
 # IAM role for EC2 instance
 resource "aws_iam_role" "prod_bastion" {
   name_prefix = "iba-prod-bastion-"
@@ -154,7 +192,12 @@ resource "aws_iam_role_policy" "prod_bastion" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.mongodb_password_ssm_parameter_name}"
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.mongodb_password_ssm_parameter_name}",
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.iba_orders_api_key_ssm_parameter_name}",
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.iba_orders_env_file_ssm_parameter_name}",
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.iba_orders_google_credentials_ssm_parameter_name}"
+        ]
       },
       {
         Sid    = "DecryptMongoDBPassword"
@@ -171,6 +214,75 @@ resource "aws_iam_role_policy" "prod_bastion" {
 resource "aws_iam_role_policy_attachment" "prod_bastion_ssm_core" {
   role       = aws_iam_role.prod_bastion.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_ssm_document" "iba_orders_sync" {
+  name            = "${var.project_name}-iba-orders-sync"
+  document_type   = "Command"
+  document_format = "JSON"
+
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Run iba_orders Docker sync job on EC2 bastion host"
+    mainSteps = [
+      {
+        action = "aws:runShellScript"
+        name   = "runIbaOrders"
+        inputs = {
+          runCommand = [
+            "set -euo pipefail",
+            "sudo yum install -y git docker >/dev/null 2>&1 || true",
+            "sudo systemctl enable --now docker",
+            "sudo mkdir -p /opt/iba_orders/.secrets /opt/iba_orders/output",
+            "if [ ! -d /opt/iba_orders/repo/.git ]; then sudo git clone ${var.iba_orders_repo_url} /opt/iba_orders/repo; fi",
+            "sudo git -C /opt/iba_orders/repo fetch --all --prune",
+            "sudo git -C /opt/iba_orders/repo checkout ${var.iba_orders_repo_ref}",
+            "sudo git -C /opt/iba_orders/repo reset --hard origin/${var.iba_orders_repo_ref} || true",
+            "if aws ssm get-parameter --name ${var.iba_orders_env_file_ssm_parameter_name} --with-decryption --region ${var.aws_region} --query Parameter.Value --output text >/tmp/iba_orders.env 2>/dev/null && [ -s /tmp/iba_orders.env ]; then sudo cp /tmp/iba_orders.env /opt/iba_orders/repo/.env; else",
+            "API_KEY=$(aws ssm get-parameter --name ${var.iba_orders_api_key_ssm_parameter_name} --with-decryption --region ${var.aws_region} --query Parameter.Value --output text)",
+            "cat <<'EOF' | sudo tee /opt/iba_orders/repo/.env >/dev/null",
+            "API_KEY=$${API_KEY}",
+            "STORE_ID=${var.iba_orders_store_id}",
+            "DAYS_BACK=${var.iba_orders_days_back}",
+            "HTTP_TIMEOUT_SECONDS=${var.iba_orders_http_timeout_seconds}",
+            "OUTPUT_FILE=/app/output/iba_squarespace_orders.csv",
+            "GOOGLE_SHEET_ID=${var.iba_orders_google_sheet_id}",
+            "GOOGLE_WORKSHEET=${var.iba_orders_google_worksheet}",
+            "GOOGLE_MEMBERS_WORKSHEET=${var.iba_orders_google_members_worksheet}",
+            "GOOGLE_CREDENTIALS_FILE=/app/.secrets/google_credentials.json",
+            "EOF",
+            "fi",
+            "sudo sed -i '/^GOOGLE_CREDENTIALS_FILE=/d' /opt/iba_orders/repo/.env",
+            "echo 'GOOGLE_CREDENTIALS_FILE=/app/.secrets/google_credentials.json' | sudo tee -a /opt/iba_orders/repo/.env >/dev/null",
+            "if aws ssm get-parameter --name ${var.iba_orders_google_credentials_ssm_parameter_name} --with-decryption --region ${var.aws_region} --query Parameter.Value --output text >/tmp/google_credentials.json 2>/dev/null; then sudo cp /tmp/google_credentials.json /opt/iba_orders/.secrets/google_credentials.json && sudo chmod 600 /opt/iba_orders/.secrets/google_credentials.json; fi",
+            "sudo docker build -t ${var.iba_orders_container_name}:latest /opt/iba_orders/repo",
+            "sudo docker run --rm --name ${var.iba_orders_container_name} --env-file /opt/iba_orders/repo/.env -v /opt/iba_orders/.secrets:/app/.secrets:ro -v /opt/iba_orders/output:/app/output ${var.iba_orders_container_name}:latest"
+          ]
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name        = "${var.project_name}-iba-orders-sync-document"
+      Environment = "prod"
+    }
+  )
+}
+
+resource "aws_ssm_association" "iba_orders_sync_schedule" {
+  count = var.iba_orders_enable_schedule ? 1 : 0
+
+  name                = aws_ssm_document.iba_orders_sync.name
+  association_name    = "${var.project_name}-iba-orders-sync-schedule"
+  schedule_expression = var.iba_orders_schedule_expression
+
+  targets {
+    key    = "InstanceIds"
+    values = [aws_instance.prod_bastion.id]
+  }
 }
 
 # IAM instance profile
@@ -294,6 +406,12 @@ resource "aws_instance" "prod_bastion" {
       Environment = "prod"
     }
   )
+
+  lifecycle {
+    ignore_changes = [
+      launch_template[0].version
+    ]
+  }
 
   depends_on = [aws_internet_gateway.prod]
 }

@@ -262,6 +262,49 @@ Recommended additions for production workloads:
 - **Application Load Balancer**: Distribute traffic across instances
 - **Auto Scaling**: Dynamic instance management
 
+## iba_orders Runbook
+
+### Run Job Now
+
+```bash
+cd /home/rch/projects/IBA/iba_cloud
+export AWS_SHARED_CREDENTIALS_FILE=.secrets/aws_credentials
+
+DOC=$(terraform output -raw iba_orders_ssm_document_name)
+IID=$(terraform output -raw prod_bastion_instance_id)
+
+aws ssm send-command \
+  --document-name "$DOC" \
+  --instance-ids "$IID" \
+  --region us-east-1 \
+  --comment "Run iba_orders sync"
+```
+
+### Check Latest Logs
+
+```bash
+cd /home/rch/projects/IBA/iba_cloud
+export AWS_SHARED_CREDENTIALS_FILE=.secrets/aws_credentials
+
+IID=$(terraform output -raw prod_bastion_instance_id)
+
+aws ssm list-command-invocations \
+  --instance-id "$IID" \
+  --details \
+  --max-items 5 \
+  --region us-east-1 \
+  --query 'CommandInvocations[].{CommandId:CommandId,Status:Status,Requested:RequestedDateTime}' \
+  --output table
+
+aws ssm get-command-invocation \
+  --command-id <command-id> \
+  --instance-id "$IID" \
+  --region us-east-1 \
+  --query '{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}' \
+  --output json
+```
+
+
 ## Troubleshooting
 
 ### "terraform init" fails

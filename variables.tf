@@ -111,3 +111,101 @@ variable "mongodb_password_ssm_parameter_name" {
   type        = string
   default     = "/iba/prod/mongodb/root_password"
 }
+
+variable "iba_orders_repo_url" {
+  description = "Git repository URL for the iba_orders project"
+  type        = string
+  default     = "https://github.com/rch317/iba_orders.git"
+}
+
+variable "iba_orders_repo_ref" {
+  description = "Git branch, tag, or commit to deploy for iba_orders"
+  type        = string
+  default     = "main"
+}
+
+variable "iba_orders_container_name" {
+  description = "Container name for iba_orders job"
+  type        = string
+  default     = "iba-orders-sync"
+}
+
+variable "iba_orders_api_key" {
+  description = "Squarespace API key for iba_orders"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "iba_orders_api_key_ssm_parameter_name" {
+  description = "SSM parameter name for iba_orders API key"
+  type        = string
+  default     = "/iba/prod/iba_orders/api_key"
+}
+
+variable "iba_orders_env_file_ssm_parameter_name" {
+  description = "SSM parameter name containing full .env content for iba_orders"
+  type        = string
+  default     = "/iba/prod/iba_orders/env_file"
+}
+
+variable "iba_orders_store_id" {
+  description = "Optional Squarespace store ID for iba_orders"
+  type        = string
+  default     = ""
+}
+
+variable "iba_orders_days_back" {
+  description = "Days of order history to fetch"
+  type        = number
+  default     = 30
+}
+
+variable "iba_orders_http_timeout_seconds" {
+  description = "HTTP timeout for iba_orders API calls"
+  type        = number
+  default     = 30
+}
+
+variable "iba_orders_google_sheet_id" {
+  description = "Optional Google Sheet ID for orders sync"
+  type        = string
+  default     = ""
+}
+
+variable "iba_orders_google_worksheet" {
+  description = "Google worksheet for orders"
+  type        = string
+  default     = "orders_v2"
+}
+
+variable "iba_orders_google_members_worksheet" {
+  description = "Google worksheet for members"
+  type        = string
+  default     = "members"
+}
+
+variable "iba_orders_google_credentials_json" {
+  description = "Optional Google service-account JSON content"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "iba_orders_google_credentials_ssm_parameter_name" {
+  description = "SSM parameter name for Google service-account JSON"
+  type        = string
+  default     = "/iba/prod/iba_orders/google_credentials_json"
+}
+
+variable "iba_orders_enable_schedule" {
+  description = "Enable scheduled execution of iba_orders via SSM association"
+  type        = bool
+  default     = true
+}
+
+variable "iba_orders_schedule_expression" {
+  description = "Schedule expression for iba_orders SSM association"
+  type        = string
+  default     = "rate(1 day)"
+}

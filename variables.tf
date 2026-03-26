@@ -209,3 +209,33 @@ variable "iba_orders_schedule_expression" {
   type        = string
   default     = "rate(1 day)"
 }
+
+variable "cloudwatch_system_log_group_name" {
+  description = "CloudWatch Logs group for EC2 system and bootstrap logs"
+  type        = string
+  default     = "/iba/prod/ec2/system"
+}
+
+variable "cloudwatch_docker_log_group_name" {
+  description = "CloudWatch Logs group for Docker container logs"
+  type        = string
+  default     = "/iba/prod/docker/containers"
+}
+
+variable "cloudwatch_log_retention_days" {
+  description = "Retention period in days for EC2 and Docker CloudWatch log groups"
+  type        = number
+  default     = 14
+}
+
+variable "alarm_notification_email" {
+  description = "Email address to receive CloudWatch alarm notifications"
+  type        = string
+  default     = "rob.hough@gmail.com"
+}
+
+variable "alarm_sns_topic_name" {
+  description = "SNS topic name for CloudWatch alarm notifications"
+  type        = string
+  default     = "iba-cloudwatch-alarms"
+}

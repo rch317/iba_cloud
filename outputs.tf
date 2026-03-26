@@ -156,3 +156,33 @@ output "iba_orders_google_credentials_ssm_parameter_name" {
   description = "SSM Parameter Store name for optional Google credentials JSON"
   value       = var.iba_orders_google_credentials_ssm_parameter_name
 }
+
+output "cloudwatch_system_log_group_name" {
+  description = "CloudWatch log group for EC2 system logs"
+  value       = aws_cloudwatch_log_group.ec2_system.name
+}
+
+output "cloudwatch_docker_log_group_name" {
+  description = "CloudWatch log group for Docker container logs"
+  value       = aws_cloudwatch_log_group.ec2_docker.name
+}
+
+output "iba_orders_zero_orders_metric_name" {
+  description = "CloudWatch metric name incremented when zero orders are fetched"
+  value       = aws_cloudwatch_log_metric_filter.iba_orders_zero_orders.metric_transformation[0].name
+}
+
+output "iba_orders_zero_orders_alarm_name" {
+  description = "CloudWatch alarm name that triggers when zero orders are fetched"
+  value       = aws_cloudwatch_metric_alarm.iba_orders_zero_orders_detected.alarm_name
+}
+
+output "alarm_notification_sns_topic_arn" {
+  description = "SNS topic ARN used for CloudWatch alarm notifications"
+  value       = aws_sns_topic.alarm_notifications.arn
+}
+
+output "alarm_notification_email" {
+  description = "Configured email endpoint for alarm notifications"
+  value       = var.alarm_notification_email
+}

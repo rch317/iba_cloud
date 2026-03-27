@@ -58,27 +58,27 @@ output "cloudtrail_kms_key_alias" {
 
 output "prod_vpc_id" {
   description = "ID of the prod VPC"
-  value       = aws_vpc.prod.id
+  value       = module.vpc.vpc_id
 }
 
 output "prod_vpc_cidr" {
   description = "CIDR block of the prod VPC"
-  value       = aws_vpc.prod.cidr_block
+  value       = module.vpc.vpc_cidr_block
 }
 
 output "prod_public_subnet_ids" {
   description = "IDs of the prod public subnets"
-  value       = [for subnet in aws_subnet.prod_public : subnet.id]
+  value       = module.vpc.public_subnets
 }
 
 output "prod_private_subnet_ids" {
   description = "IDs of the prod private subnets"
-  value       = [for subnet in aws_subnet.prod_private : subnet.id]
+  value       = module.vpc.private_subnets
 }
 
 output "prod_internet_gateway_id" {
   description = "ID of the prod internet gateway"
-  value       = aws_internet_gateway.prod.id
+  value       = module.vpc.igw_id
 }
 
 output "prod_bastion_instance_id" {

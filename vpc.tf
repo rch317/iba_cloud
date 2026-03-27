@@ -2,20 +2,91 @@
 
 locals {
   prod_azs = slice(data.aws_availability_zones.available.names, 0, var.prod_subnet_az_count)
+
+  prod_public_subnet_cidrs = [
+    for index, az in local.prod_azs : cidrsubnet(var.prod_vpc_cidr, 4, index)
+  ]
+
+  prod_private_subnet_cidrs = [
+    for index, az in local.prod_azs : cidrsubnet(var.prod_vpc_cidr, 4, index + var.prod_subnet_az_count)
+  ]
+
+  prod_public_subnet_names = [
+    for az in local.prod_azs : "${var.project_name}-prod-public-${az}"
+  ]
+
+  prod_private_subnet_names = [
+    for az in local.prod_azs : "${var.project_name}-prod-private-${az}"
+  ]
 }
 
-resource "aws_vpc" "prod" {
-  cidr_block           = var.prod_vpc_cidr
+#tfsec:ignore:aws-ec2-no-public-ip-subnet Public subnets are intentional for bastion ingress.
+#tfsec:ignore:aws-ec2-require-vpc-flow-logs-for-all-vpcs Flow logs are enabled via aws_flow_log.prod below.
+#tfsec:ignore:aws-ec2-no-public-ingress-acl NACL resources are module-internal and not created with this module input set.
+#tfsec:ignore:aws-ec2-no-excessive-port-access NACL resources are module-internal and not created with this module input set.
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 6.6"
+
+  name = "${var.project_name}-prod"
+  cidr = var.prod_vpc_cidr
+  azs  = local.prod_azs
+
+  public_subnets  = local.prod_public_subnet_cidrs
+  private_subnets = local.prod_private_subnet_cidrs
+
+  public_subnet_names  = local.prod_public_subnet_names
+  private_subnet_names = local.prod_private_subnet_names
+
+  map_public_ip_on_launch = true
+
   enable_dns_support   = true
   enable_dns_hostnames = true
+  enable_nat_gateway   = false
 
-  tags = merge(
-    var.common_tags,
-    {
-      Name        = "${var.project_name}-prod-vpc"
-      Environment = "prod"
-    }
-  )
+  create_multiple_public_route_tables = false
+  single_nat_gateway                  = true
+
+  manage_default_network_acl    = false
+  manage_default_route_table    = false
+  manage_default_security_group = false
+
+  public_dedicated_network_acl  = false
+  private_dedicated_network_acl = false
+
+  public_subnet_tags = {
+    Environment = "prod"
+    Tier        = "public"
+  }
+
+  private_subnet_tags = {
+    Environment = "prod"
+    Tier        = "private"
+  }
+
+  vpc_tags = {
+    Name        = "${var.project_name}-prod-vpc"
+    Environment = "prod"
+  }
+
+  igw_tags = {
+    Name        = "${var.project_name}-prod-igw"
+    Environment = "prod"
+  }
+
+  public_route_table_tags = {
+    Name        = "${var.project_name}-prod-public-rt"
+    Environment = "prod"
+    Tier        = "public"
+  }
+
+  private_route_table_tags = {
+    Name        = "${var.project_name}-prod-private-rt"
+    Environment = "prod"
+    Tier        = "private"
+  }
+
+  tags = var.common_tags
 }
 
 module "s3_prod_vpc_flow_logs" {
@@ -66,7 +137,7 @@ resource "aws_flow_log" "prod" {
   log_destination_type = "s3"
   log_destination      = module.s3_prod_vpc_flow_logs.s3_bucket_arn
   traffic_type         = "ALL"
-  vpc_id               = aws_vpc.prod.id
+  vpc_id               = module.vpc.vpc_id
 
   destination_options {
     file_format                = "parquet"
@@ -81,106 +152,4 @@ resource "aws_flow_log" "prod" {
       Environment = "prod"
     }
   )
-}
-
-resource "aws_internet_gateway" "prod" {
-  vpc_id = aws_vpc.prod.id
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name        = "${var.project_name}-prod-igw"
-      Environment = "prod"
-    }
-  )
-}
-
-resource "aws_subnet" "prod_public" {
-  for_each = {
-    for index, az in local.prod_azs : az => {
-      az   = az
-      cidr = cidrsubnet(var.prod_vpc_cidr, 4, index)
-    }
-  }
-
-  vpc_id                  = aws_vpc.prod.id
-  availability_zone       = each.value.az
-  cidr_block              = each.value.cidr
-  map_public_ip_on_launch = true
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name        = "${var.project_name}-prod-public-${each.value.az}"
-      Environment = "prod"
-      Tier        = "public"
-    }
-  )
-}
-
-resource "aws_subnet" "prod_private" {
-  for_each = {
-    for index, az in local.prod_azs : az => {
-      az   = az
-      cidr = cidrsubnet(var.prod_vpc_cidr, 4, index + var.prod_subnet_az_count)
-    }
-  }
-
-  vpc_id            = aws_vpc.prod.id
-  availability_zone = each.value.az
-  cidr_block        = each.value.cidr
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name        = "${var.project_name}-prod-private-${each.value.az}"
-      Environment = "prod"
-      Tier        = "private"
-    }
-  )
-}
-
-resource "aws_route_table" "prod_public" {
-  vpc_id = aws_vpc.prod.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.prod.id
-  }
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name        = "${var.project_name}-prod-public-rt"
-      Environment = "prod"
-      Tier        = "public"
-    }
-  )
-}
-
-resource "aws_route_table" "prod_private" {
-  vpc_id = aws_vpc.prod.id
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name        = "${var.project_name}-prod-private-rt"
-      Environment = "prod"
-      Tier        = "private"
-    }
-  )
-}
-
-resource "aws_route_table_association" "prod_public" {
-  for_each = aws_subnet.prod_public
-
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.prod_public.id
-}
-
-resource "aws_route_table_association" "prod_private" {
-  for_each = aws_subnet.prod_private
-
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.prod_private.id
 }

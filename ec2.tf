@@ -30,7 +30,7 @@ resource "local_file" "prod_bastion_pem" {
 resource "aws_security_group" "prod_bastion" {
   name_prefix = "iba-prod-bastion-"
   description = "Security group for IBA prod bastion/test instance - testing only, restrict in production"
-  vpc_id      = aws_vpc.prod.id
+  vpc_id      = module.vpc.vpc_id
 
   tags = merge(
     var.common_tags,
@@ -392,7 +392,7 @@ resource "aws_instance" "prod_bastion" {
     version = "$Latest"
   }
 
-  subnet_id                   = aws_subnet.prod_public[data.aws_availability_zones.available.names[0]].id
+  subnet_id                   = module.vpc.public_subnets[0]
   vpc_security_group_ids      = [aws_security_group.prod_bastion.id]
   key_name                    = aws_key_pair.prod_bastion.key_name
   iam_instance_profile        = aws_iam_instance_profile.prod_bastion.name
@@ -434,7 +434,7 @@ resource "aws_instance" "prod_bastion" {
     ]
   }
 
-  depends_on = [aws_internet_gateway.prod]
+  depends_on = [module.vpc]
 }
 
 # Elastic IP for consistent access
@@ -450,5 +450,5 @@ resource "aws_eip" "prod_bastion" {
     }
   )
 
-  depends_on = [aws_internet_gateway.prod]
+  depends_on = [module.vpc]
 }

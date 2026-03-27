@@ -8,62 +8,48 @@ resource "random_uuid" "terraform_backend" {
   }
 }
 
-# S3 bucket for Terraform state
-resource "aws_s3_bucket" "terraform_state" {
-  bucket = "${var.project_name}-terraform-state-${random_uuid.terraform_backend.result}"
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name = "${var.project_name}-terraform-state"
-    }
-  )
+locals {
+  terraform_state_bucket_name      = "${var.project_name}-terraform-state-${random_uuid.terraform_backend.result}"
+  terraform_state_logs_bucket_name = "${var.project_name}-terraform-state-logs-${random_uuid.terraform_backend.result}"
+  prod_vpc_flow_logs_bucket_name   = "${var.project_name}-prod-vpc-flow-logs-${data.aws_caller_identity.current.account_id}"
 }
 
-# Block all public access to state bucket
-resource "aws_s3_bucket_public_access_block" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.id
+module "s3_terraform_state_logs" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "~> 5.11"
+
+  bucket = local.terraform_state_logs_bucket_name
 
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
-}
 
-# Enable versioning for state recovery
-resource "aws_s3_bucket_versioning" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.id
-
-  versioning_configuration {
-    status     = "Enabled"
-    mfa_delete = "Disabled" # Can be enabled if MFA is configured
+  versioning = {
+    status = true
   }
-}
 
-# Enable server-side encryption with KMS
-resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.terraform_state.arn
+  server_side_encryption_configuration = {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = module.kms_terraform_state.key_arn
+      }
     }
-    bucket_key_enabled = true
   }
-}
 
-# Enable access logging for audit trail
-resource "aws_s3_bucket_logging" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.id
+  logging = {
+    target_bucket = local.terraform_state_logs_bucket_name
+    target_prefix = "self-logs/"
+  }
 
-  target_bucket = aws_s3_bucket.terraform_state_logs.id
-  target_prefix = "state-access-logs/"
-}
-
-# S3 bucket for logging access to state bucket
-resource "aws_s3_bucket" "terraform_state_logs" {
-  bucket = "${var.project_name}-terraform-state-logs-${random_uuid.terraform_backend.result}"
+  attach_access_log_delivery_policy          = true
+  access_log_delivery_policy_source_accounts = [data.aws_caller_identity.current.account_id]
+  access_log_delivery_policy_source_buckets = [
+    "arn:aws:s3:::${local.terraform_state_bucket_name}",
+    "arn:aws:s3:::${local.terraform_state_logs_bucket_name}",
+    "arn:aws:s3:::${local.prod_vpc_flow_logs_bucket_name}"
+  ]
 
   tags = merge(
     var.common_tags,
@@ -73,114 +59,44 @@ resource "aws_s3_bucket" "terraform_state_logs" {
   )
 }
 
-# Block public access to logs bucket
-resource "aws_s3_bucket_public_access_block" "terraform_state_logs" {
-  bucket = aws_s3_bucket.terraform_state_logs.id
+module "s3_terraform_state" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "~> 5.11"
+
+  bucket = local.terraform_state_bucket_name
 
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
-}
 
-# Enable encryption on logs bucket
-resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state_logs" {
-  bucket = aws_s3_bucket.terraform_state_logs.id
+  versioning = {
+    status     = true
+    mfa_delete = false
+  }
 
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.terraform_state.arn
+  server_side_encryption_configuration = {
+    rule = {
+      bucket_key_enabled = true
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = module.kms_terraform_state.key_arn
+      }
     }
   }
-}
 
-# Enable versioning on logs bucket for recovery
-resource "aws_s3_bucket_versioning" "terraform_state_logs" {
-  bucket = aws_s3_bucket.terraform_state_logs.id
-
-  versioning_configuration {
-    status = "Enabled"
+  logging = {
+    target_bucket = module.s3_terraform_state_logs.s3_bucket_id
+    target_prefix = "state-access-logs/"
   }
-}
 
-# Enable access logging on logs bucket (logs to itself)
-resource "aws_s3_bucket_logging" "terraform_state_logs" {
-  bucket = aws_s3_bucket.terraform_state_logs.id
-
-  target_bucket = aws_s3_bucket.terraform_state_logs.id
-  target_prefix = "self-logs/"
-}
-
-# Enforce SSL/TLS for state bucket access
-resource "aws_s3_bucket_policy" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "EnforceSSLOnly"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource = [
-          aws_s3_bucket.terraform_state.arn,
-          "${aws_s3_bucket.terraform_state.arn}/*"
-        ]
-        Condition = {
-          Bool = {
-            "aws:SecureTransport" = "false"
-          }
-        }
-      }
-    ]
-  })
-}
-
-# KMS key for state encryption
-resource "aws_kms_key" "terraform_state" {
-  description             = "KMS key for ${var.project_name} Terraform state encryption"
-  deletion_window_in_days = 10
-  enable_key_rotation     = true
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "Enable IAM policies"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action   = "kms:*"
-        Resource = "*"
-      },
-      {
-        Sid    = "Allow S3 to use the key"
-        Effect = "Allow"
-        Principal = {
-          Service = "s3.amazonaws.com"
-        }
-        Action = [
-          "kms:Decrypt",
-          "kms:GenerateDataKey"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
+  attach_deny_insecure_transport_policy = true
 
   tags = merge(
     var.common_tags,
     {
-      Name = "${var.project_name}-terraform-state-key"
+      Name = "${var.project_name}-terraform-state"
     }
   )
 }
 
-# KMS key alias for state encryption
-resource "aws_kms_alias" "terraform_state" {
-  name          = "alias/${var.project_name}-terraform-state"
-  target_key_id = aws_kms_key.terraform_state.key_id
-}

@@ -3,22 +3,22 @@
 
 output "terraform_state_bucket" {
   description = "Name of the S3 bucket for Terraform state"
-  value       = aws_s3_bucket.terraform_state.id
+  value       = module.s3_terraform_state.s3_bucket_id
 }
 
 output "terraform_state_bucket_arn" {
   description = "ARN of the S3 bucket for Terraform state"
-  value       = aws_s3_bucket.terraform_state.arn
+  value       = module.s3_terraform_state.s3_bucket_arn
 }
 
 output "terraform_state_kms_key_id" {
   description = "ID of the KMS key for Terraform state encryption"
-  value       = aws_kms_key.terraform_state.id
+  value       = module.kms_terraform_state.key_id
 }
 
 output "cloudtrail_bucket_name" {
   description = "Name of the S3 bucket for CloudTrail logs"
-  value       = aws_s3_bucket.cloudtrail_logs.id
+  value       = module.s3_cloudtrail_logs.s3_bucket_id
 }
 
 output "cloudtrail_arn" {
@@ -28,32 +28,32 @@ output "cloudtrail_arn" {
 
 output "kms_key_id" {
   description = "ID of the main KMS key"
-  value       = aws_kms_key.main.id
+  value       = module.kms_main.key_id
 }
 
 output "kms_key_arn" {
   description = "ARN of the main KMS key"
-  value       = aws_kms_key.main.arn
+  value       = module.kms_main.key_arn
 }
 
 output "kms_key_alias" {
   description = "Alias of the main KMS key"
-  value       = aws_kms_alias.main.name
+  value       = "alias/${var.project_name}-main"
 }
 
 output "cloudtrail_kms_key_id" {
   description = "ID of the CloudTrail KMS key"
-  value       = aws_kms_key.cloudtrail.id
+  value       = module.kms_cloudtrail.key_id
 }
 
 output "cloudtrail_kms_key_arn" {
   description = "ARN of the CloudTrail KMS key"
-  value       = aws_kms_key.cloudtrail.arn
+  value       = module.kms_cloudtrail.key_arn
 }
 
 output "cloudtrail_kms_key_alias" {
   description = "Alias of the CloudTrail KMS key"
-  value       = aws_kms_alias.cloudtrail.name
+  value       = "alias/${var.project_name}-cloudtrail"
 }
 
 output "prod_vpc_id" {

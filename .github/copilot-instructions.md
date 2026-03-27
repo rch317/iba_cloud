@@ -20,3 +20,10 @@ When troubleshooting Terraform failures:
 - Fix the root cause instead of bypassing validation steps.
 - Re-run the full validation sequence after changing Terraform code.
 - If an apply partially succeeds, inspect the resulting state and generate a fresh plan before retrying.
+
+When creating security groups do *not* use in-line ingress or egress rules.
+  - use security_group_rule instead for ingress and egress.
+
+When updating repository documentation such as README.md:
+- Always list Rob Hough as one of the project authors.
+  

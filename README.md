@@ -83,6 +83,11 @@ iba_cloud/
 ├── datasources.tf        # AWS data sources (availability zones, account info)
 ├── vpc.tf                # VPC, subnets, internet gateway, route tables, flow logs
 ├── kms.tf                # Customer-managed encryption keys
+├── templates/
+│   ├── iam_policies/     # IAM assume-role and inline policy templates
+│   ├── kms_policies/     # KMS key policy templates used by kms.tf
+│   ├── s3_policies/      # S3 bucket policy templates
+│   └── ssm_documents/    # SSM document JSON templates
 ├── cloudtrail.tf         # Audit logging configuration
 ├── outputs.tf            # Exported resource IDs and values
 ├── .tflint.hcl           # TFLint configuration for linting
@@ -195,6 +200,45 @@ All sensitive data at rest is encrypted with customer-managed KMS keys:
 - Terraform state S3 bucket
 - CloudTrail audit logs
 
+### KMS Module and Policy Template Pattern
+
+KMS keys are managed using the Terraform Registry module `terraform-aws-modules/kms/aws` in `kms.tf`.
+Each key's policy is stored as a separate template file under `templates/kms_policies` and rendered with `templatefile(...)`.
+
+Current policy templates:
+- `templates/kms_policies/main_policy.json.tftpl`
+- `templates/kms_policies/cloudtrail_policy.json.tftpl`
+- `templates/kms_policies/terraform_state_policy.json.tftpl`
+
+This pattern keeps policy JSON out of inline HCL and makes key-specific policy changes easier to review.
+
+When adding a new KMS key:
+1. Create a new policy template in `templates/kms_policies`.
+2. Add a new KMS module block in `kms.tf`.
+3. Pass unique values to `templatefile(...)` (for example: account ID, region, root principal, service ARNs).
+4. Expose outputs in `outputs.tf` if downstream resources need the key ARN or ID.
+5. Run the full validation sequence: `terraform fmt -recursive .`, `tflint`, `tfsec`, `terraform validate`, then `terraform plan`.
+
+For existing stateful keys, migrate Terraform addresses with `terraform state mv` before applying to avoid accidental key replacement.
+
+### Shared Template Pattern
+
+Large structured JSON is externalized into template files under `templates/` and rendered with `templatefile(...)`.
+Current template groups are:
+
+- `templates/iam_policies` for IAM assume-role and inline policy documents
+- `templates/kms_policies` for KMS key policies
+- `templates/s3_policies` for S3 bucket policies
+- `templates/ssm_documents` for SSM document payloads
+
+Use this pattern when a Terraform block contains long `jsonencode(...)` content, repeated policy logic, or script-heavy JSON that is difficult to review inline.
+
+When creating a new template-backed resource:
+1. Put the JSON template in the most specific folder under `templates/`.
+2. Pass only the values that actually vary between environments or resources.
+3. Prefer `jsonencode(jsondecode(templatefile(...)))` for JSON payloads where Terraform string formatting could otherwise create unnecessary drift.
+4. Re-run the standard validation sequence before planning or applying.
+
 ### VPC Flow Logs
 
 Network traffic is logged to S3 in Parquet format with hourly partitions for cost efficiency and Hive compatibility. This enables:
@@ -210,6 +254,31 @@ All API calls are logged to CloudTrail for audit and compliance:
 - Compliance verification
 
 ## Common Tasks
+
+### KMS Change Checklist
+
+Use this checklist when adding or changing a KMS key:
+
+1. Create or update the relevant policy template in `templates/kms_policies`.
+2. Update the corresponding KMS module block in `kms.tf`.
+3. Pass all required unique values into `templatefile(...)`.
+4. Update any downstream resource references and outputs.
+5. If migrating an existing key resource into a module address, run `terraform state mv` before applying.
+6. Run the full validation sequence:
+
+```bash
+terraform fmt -recursive .
+tflint
+tfsec
+terraform validate
+terraform plan -out=iba_cloud.tfplan
+```
+
+7. Apply only a reviewed saved plan:
+
+```bash
+terraform apply iba_cloud.tfplan
+```
 
 ### View Current Infrastructure
 
@@ -351,6 +420,7 @@ Internal use only. Do not distribute without authorization.
 
 ## Authors
 
+- Rob Hough
 - Infrastructure provisioned with Terraform
-- Managed by GitHub Copilot agent
+- Assisted by GitHub Copilot agent
 - Last updated: March 2026

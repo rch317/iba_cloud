@@ -1,51 +1,45 @@
 # CloudTrail Configuration for Audit Logging
 
-# S3 bucket for CloudTrail logs
-resource "aws_s3_bucket" "cloudtrail_logs" {
-  bucket = "${var.project_name}-cloudtrail-logs-${data.aws_caller_identity.current.account_id}"
-
-  tags = merge(
-    var.common_tags,
-    {
-      Name = "${var.project_name}-cloudtrail-logs"
-    }
-  )
+locals {
+  cloudtrail_logs_bucket_name         = "${var.project_name}-cloudtrail-logs-${data.aws_caller_identity.current.account_id}"
+  cloudtrail_logs_logging_bucket_name = "${var.project_name}-logs-${substr(random_uuid.terraform_backend.result, 0, 8)}"
 }
 
-# Enable versioning on the S3 bucket
-resource "aws_s3_bucket_versioning" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
+module "s3_cloudtrail_logs_logging" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "~> 5.11"
 
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# Block public access to CloudTrail logs
-resource "aws_s3_bucket_public_access_block" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
+  bucket = local.cloudtrail_logs_logging_bucket_name
 
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
-}
 
-# Enable encryption on the S3 bucket with KMS
-resource "aws_s3_bucket_server_side_encryption_configuration" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
+  versioning = {
+    status = true
+  }
 
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.cloudtrail.arn
+  server_side_encryption_configuration = {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = module.kms_cloudtrail.key_arn
+      }
     }
   }
-}
 
-# S3 bucket for CloudTrail access logging
-resource "aws_s3_bucket" "cloudtrail_logs_logging" {
-  bucket = "${var.project_name}-logs-${substr(random_uuid.terraform_backend.result, 0, 8)}"
+  logging = {
+    target_bucket = local.cloudtrail_logs_logging_bucket_name
+    target_prefix = "self-logs/"
+  }
+
+  attach_access_log_delivery_policy          = true
+  access_log_delivery_policy_source_accounts = [data.aws_caller_identity.current.account_id]
+  access_log_delivery_policy_source_buckets = [
+    "arn:aws:s3:::${local.cloudtrail_logs_bucket_name}",
+    "arn:aws:s3:::${local.cloudtrail_logs_logging_bucket_name}"
+  ]
 
   tags = merge(
     var.common_tags,
@@ -55,58 +49,50 @@ resource "aws_s3_bucket" "cloudtrail_logs_logging" {
   )
 }
 
-# Block public access to CloudTrail logs logging bucket
-resource "aws_s3_bucket_public_access_block" "cloudtrail_logs_logging" {
-  bucket = aws_s3_bucket.cloudtrail_logs_logging.id
+module "s3_cloudtrail_logs" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "~> 5.11"
+
+  bucket = local.cloudtrail_logs_bucket_name
 
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
-}
 
-# Enable versioning on CloudTrail logs logging bucket
-resource "aws_s3_bucket_versioning" "cloudtrail_logs_logging" {
-  bucket = aws_s3_bucket.cloudtrail_logs_logging.id
-
-  versioning_configuration {
-    status = "Enabled"
+  versioning = {
+    status = true
   }
-}
 
-# Enable encryption on CloudTrail logs logging bucket
-resource "aws_s3_bucket_server_side_encryption_configuration" "cloudtrail_logs_logging" {
-  bucket = aws_s3_bucket.cloudtrail_logs_logging.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.cloudtrail.arn
+  server_side_encryption_configuration = {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = module.kms_cloudtrail.key_arn
+      }
     }
   }
-}
 
-# Enable logging on logs bucket (logs to itself)
-resource "aws_s3_bucket_logging" "cloudtrail_logs_logging" {
-  bucket = aws_s3_bucket.cloudtrail_logs_logging.id
+  logging = {
+    target_bucket = module.s3_cloudtrail_logs_logging.s3_bucket_id
+    target_prefix = "cloudtrail-logs-access/"
+  }
 
-  target_bucket = aws_s3_bucket.cloudtrail_logs_logging.id
-  target_prefix = "self-logs/"
-}
+  attach_cloudtrail_log_delivery_policy = true
 
-# Enable access logging for CloudTrail logs
-resource "aws_s3_bucket_logging" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
-
-  target_bucket = aws_s3_bucket.cloudtrail_logs_logging.id
-  target_prefix = "cloudtrail-logs-access/"
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.project_name}-cloudtrail-logs"
+    }
+  )
 }
 
 # CloudWatch Logs group for CloudTrail
 resource "aws_cloudwatch_log_group" "cloudtrail" {
   name              = "/aws/cloudtrail/${var.project_name}"
   retention_in_days = 30
-  kms_key_id        = aws_kms_key.cloudtrail.arn
+  kms_key_id        = module.kms_cloudtrail.key_arn
 
   tags = merge(
     var.common_tags,
@@ -120,18 +106,7 @@ resource "aws_cloudwatch_log_group" "cloudtrail" {
 resource "aws_iam_role" "cloudtrail_cloudwatch" {
   name = "${var.project_name}-cloudtrail-cloudwatch-role"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "cloudtrail.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
+  assume_role_policy = templatefile("${path.module}/templates/iam_policies/cloudtrail_cloudwatch_assume_role.json.tftpl", {})
 
   tags = merge(
     var.common_tags,
@@ -146,75 +121,23 @@ resource "aws_iam_role_policy" "cloudtrail_cloudwatch" {
   name = "${var.project_name}-cloudtrail-cloudwatch-policy"
   role = aws_iam_role.cloudtrail_cloudwatch.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:GenerateDataKey"
-        ]
-        Resource = aws_kms_key.cloudtrail.arn
-      }
-    ]
-  })
-}
-
-# S3 bucket policy to allow CloudTrail to write logs
-resource "aws_s3_bucket_policy" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AWSCloudTrailAclCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "cloudtrail.amazonaws.com"
-        }
-        Action   = "s3:GetBucketAcl"
-        Resource = aws_s3_bucket.cloudtrail_logs.arn
-      },
-      {
-        Sid    = "AWSCloudTrailWrite"
-        Effect = "Allow"
-        Principal = {
-          Service = "cloudtrail.amazonaws.com"
-        }
-        Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.cloudtrail_logs.arn}/*"
-        Condition = {
-          StringEquals = {
-            "s3:x-amz-acl" = "bucket-owner-full-control"
-          }
-        }
-      }
-    ]
+  policy = templatefile("${path.module}/templates/iam_policies/cloudtrail_cloudwatch_policy.json.tftpl", {
+    cloudwatch_log_group_arn = aws_cloudwatch_log_group.cloudtrail.arn
+    kms_key_arn              = module.kms_cloudtrail.key_arn
   })
 }
 
 # CloudTrail for organization/account audit logging
 resource "aws_cloudtrail" "main" {
   name                          = "${var.project_name}-trail"
-  s3_bucket_name                = aws_s3_bucket.cloudtrail_logs.id
+  s3_bucket_name                = module.s3_cloudtrail_logs.s3_bucket_id
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_log_file_validation    = true
-  kms_key_id                    = aws_kms_key.cloudtrail.arn
+  kms_key_id                    = module.kms_cloudtrail.key_arn
   cloud_watch_logs_group_arn    = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
   cloud_watch_logs_role_arn     = aws_iam_role.cloudtrail_cloudwatch.arn
-  depends_on                    = [aws_s3_bucket_policy.cloudtrail_logs, aws_iam_role_policy.cloudtrail_cloudwatch]
+  depends_on                    = [module.s3_cloudtrail_logs, aws_iam_role_policy.cloudtrail_cloudwatch]
 
   event_selector {
     read_write_type           = "All"

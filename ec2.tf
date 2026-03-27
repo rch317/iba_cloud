@@ -84,7 +84,7 @@ resource "aws_ssm_parameter" "mongodb_root_password" {
   name        = var.mongodb_password_ssm_parameter_name
   description = "MongoDB root password for containerized MongoDB on bastion host"
   type        = "SecureString"
-  key_id      = aws_kms_key.main.arn
+  key_id      = module.kms_main.key_arn
   value       = random_password.mongodb_root.result
 
   tags = merge(
@@ -100,7 +100,7 @@ resource "aws_ssm_parameter" "iba_orders_api_key" {
   name        = var.iba_orders_api_key_ssm_parameter_name
   description = "Squarespace API key for iba_orders container job"
   type        = "SecureString"
-  key_id      = aws_kms_key.main.arn
+  key_id      = module.kms_main.key_arn
   value       = var.iba_orders_api_key != "" ? var.iba_orders_api_key : "REPLACE_ME"
 
   lifecycle {
@@ -122,7 +122,7 @@ resource "aws_ssm_parameter" "iba_orders_google_credentials_json" {
   name        = var.iba_orders_google_credentials_ssm_parameter_name
   description = "Google service-account JSON for iba_orders"
   type        = "SecureString"
-  key_id      = aws_kms_key.main.arn
+  key_id      = module.kms_main.key_arn
   value       = var.iba_orders_google_credentials_json
 
   tags = merge(
@@ -137,7 +137,7 @@ resource "aws_ssm_parameter" "iba_orders_google_credentials_json" {
 resource "aws_cloudwatch_log_group" "ec2_system" {
   name              = var.cloudwatch_system_log_group_name
   retention_in_days = var.cloudwatch_log_retention_days
-  kms_key_id        = aws_kms_key.main.arn
+  kms_key_id        = module.kms_main.key_arn
 
   tags = merge(
     var.common_tags,
@@ -151,7 +151,7 @@ resource "aws_cloudwatch_log_group" "ec2_system" {
 resource "aws_cloudwatch_log_group" "ec2_docker" {
   name              = var.cloudwatch_docker_log_group_name
   retention_in_days = var.cloudwatch_log_retention_days
-  kms_key_id        = aws_kms_key.main.arn
+  kms_key_id        = module.kms_main.key_arn
 
   tags = merge(
     var.common_tags,
@@ -201,7 +201,7 @@ resource "aws_cloudwatch_metric_alarm" "iba_orders_zero_orders_detected" {
 
 resource "aws_sns_topic" "alarm_notifications" {
   name              = var.alarm_sns_topic_name
-  kms_master_key_id = aws_kms_key.main.arn
+  kms_master_key_id = module.kms_main.key_arn
 
   tags = merge(
     var.common_tags,
@@ -222,18 +222,7 @@ resource "aws_sns_topic_subscription" "alarm_email" {
 resource "aws_iam_role" "prod_bastion" {
   name_prefix = "iba-prod-bastion-"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
+  assume_role_policy = templatefile("${path.module}/templates/iam_policies/prod_bastion_assume_role.json.tftpl", {})
 
   tags = merge(
     var.common_tags,
@@ -249,49 +238,14 @@ resource "aws_iam_role_policy" "prod_bastion" {
   name_prefix = "iba-prod-bastion-"
   role        = aws_iam_role.prod_bastion.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "SSMSessionManagerAccess"
-        Effect = "Allow"
-        Action = [
-          "ssm:UpdateInstanceInformation",
-          "ssmmessages:AcknowledgeMessage",
-          "ssmmessages:GetEndpoint",
-          "ssmmessages:GetMessages",
-          "ec2messages:GetMessages"
-        ]
-        Resource = "arn:aws:ec2:*:*:instance/*"
-        Condition = {
-          StringEquals = {
-            "aws:ResourceAccount" = data.aws_caller_identity.current.account_id
-          }
-        }
-      },
-      {
-        Sid    = "ReadMongoDBPasswordFromParameterStore"
-        Effect = "Allow"
-        Action = [
-          "ssm:GetParameter",
-          "ssm:GetParameters"
-        ]
-        Resource = [
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.mongodb_password_ssm_parameter_name}",
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.iba_orders_api_key_ssm_parameter_name}",
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.iba_orders_env_file_ssm_parameter_name}",
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.iba_orders_google_credentials_ssm_parameter_name}"
-        ]
-      },
-      {
-        Sid    = "DecryptMongoDBPassword"
-        Effect = "Allow"
-        Action = [
-          "kms:Decrypt"
-        ]
-        Resource = aws_kms_key.main.arn
-      }
-    ]
+  policy = templatefile("${path.module}/templates/iam_policies/prod_bastion_policy.json.tftpl", {
+    account_id                                       = data.aws_caller_identity.current.account_id
+    aws_region                                       = var.aws_region
+    mongodb_password_ssm_parameter_name              = var.mongodb_password_ssm_parameter_name
+    iba_orders_api_key_ssm_parameter_name            = var.iba_orders_api_key_ssm_parameter_name
+    iba_orders_env_file_ssm_parameter_name           = var.iba_orders_env_file_ssm_parameter_name
+    iba_orders_google_credentials_ssm_parameter_name = var.iba_orders_google_credentials_ssm_parameter_name
+    kms_key_arn                                      = module.kms_main.key_arn
   })
 }
 
@@ -310,65 +264,23 @@ resource "aws_ssm_document" "iba_orders_sync" {
   document_type   = "Command"
   document_format = "JSON"
 
-  content = jsonencode({
-    schemaVersion = "2.2"
-    description   = "Run iba_orders Docker sync job on EC2 bastion host"
-    mainSteps = [
-      {
-        action = "aws:runShellScript"
-        name   = "runIbaOrders"
-        inputs = {
-          runCommand = [
-            "set -euo pipefail",
-            "sudo yum install -y git docker amazon-cloudwatch-agent >/dev/null 2>&1 || true",
-            "sudo systemctl enable --now docker",
-            "cat <<'EOF' | sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json >/dev/null",
-            "{",
-            "  \"logs\": {",
-            "    \"logs_collected\": {",
-            "      \"files\": {",
-            "        \"collect_list\": [",
-            "          {\"file_path\": \"/var/log/messages\", \"log_group_name\": \"${aws_cloudwatch_log_group.ec2_system.name}\", \"log_stream_name\": \"{instance_id}/messages\", \"timestamp_format\": \"%b %d %H:%M:%S\"},",
-            "          {\"file_path\": \"/var/log/secure\", \"log_group_name\": \"${aws_cloudwatch_log_group.ec2_system.name}\", \"log_stream_name\": \"{instance_id}/secure\", \"timestamp_format\": \"%b %d %H:%M:%S\"},",
-            "          {\"file_path\": \"/var/log/cloud-init.log\", \"log_group_name\": \"${aws_cloudwatch_log_group.ec2_system.name}\", \"log_stream_name\": \"{instance_id}/cloud-init\"},",
-            "          {\"file_path\": \"/var/log/user-data.log\", \"log_group_name\": \"${aws_cloudwatch_log_group.ec2_system.name}\", \"log_stream_name\": \"{instance_id}/user-data\"}",
-            "        ]",
-            "      }",
-            "    }",
-            "  }",
-            "}",
-            "EOF",
-            "sudo systemctl enable amazon-cloudwatch-agent >/dev/null 2>&1 || true",
-            "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s >/dev/null 2>&1 || true",
-            "sudo mkdir -p /opt/iba_orders/.secrets /opt/iba_orders/output",
-            "if [ ! -d /opt/iba_orders/repo/.git ]; then sudo git clone ${var.iba_orders_repo_url} /opt/iba_orders/repo; fi",
-            "sudo git -C /opt/iba_orders/repo fetch --all --prune",
-            "sudo git -C /opt/iba_orders/repo checkout ${var.iba_orders_repo_ref}",
-            "sudo git -C /opt/iba_orders/repo reset --hard origin/${var.iba_orders_repo_ref} || true",
-            "if aws ssm get-parameter --name ${var.iba_orders_env_file_ssm_parameter_name} --with-decryption --region ${var.aws_region} --query Parameter.Value --output text >/tmp/iba_orders.env 2>/dev/null && [ -s /tmp/iba_orders.env ]; then sudo cp /tmp/iba_orders.env /opt/iba_orders/repo/.env; else",
-            "API_KEY=$(aws ssm get-parameter --name ${var.iba_orders_api_key_ssm_parameter_name} --with-decryption --region ${var.aws_region} --query Parameter.Value --output text)",
-            "cat <<'EOF' | sudo tee /opt/iba_orders/repo/.env >/dev/null",
-            "API_KEY=$${API_KEY}",
-            "STORE_ID=${var.iba_orders_store_id}",
-            "DAYS_BACK=${var.iba_orders_days_back}",
-            "HTTP_TIMEOUT_SECONDS=${var.iba_orders_http_timeout_seconds}",
-            "OUTPUT_FILE=/app/output/iba_squarespace_orders.csv",
-            "GOOGLE_SHEET_ID=${var.iba_orders_google_sheet_id}",
-            "GOOGLE_WORKSHEET=${var.iba_orders_google_worksheet}",
-            "GOOGLE_MEMBERS_WORKSHEET=${var.iba_orders_google_members_worksheet}",
-            "GOOGLE_CREDENTIALS_FILE=/app/.secrets/google_credentials.json",
-            "EOF",
-            "fi",
-            "sudo sed -i '/^GOOGLE_CREDENTIALS_FILE=/d' /opt/iba_orders/repo/.env",
-            "echo 'GOOGLE_CREDENTIALS_FILE=/app/.secrets/google_credentials.json' | sudo tee -a /opt/iba_orders/repo/.env >/dev/null",
-            "if aws ssm get-parameter --name ${var.iba_orders_google_credentials_ssm_parameter_name} --with-decryption --region ${var.aws_region} --query Parameter.Value --output text >/tmp/google_credentials.json 2>/dev/null; then sudo cp /tmp/google_credentials.json /opt/iba_orders/.secrets/google_credentials.json && sudo chmod 600 /opt/iba_orders/.secrets/google_credentials.json; fi",
-            "sudo docker build -t ${var.iba_orders_container_name}:latest /opt/iba_orders/repo",
-            "sudo docker run --rm --name ${var.iba_orders_container_name} --log-driver awslogs --log-opt awslogs-region=${var.aws_region} --log-opt awslogs-group=${aws_cloudwatch_log_group.ec2_docker.name} --log-opt awslogs-stream=${var.iba_orders_container_name} --env-file /opt/iba_orders/repo/.env -v /opt/iba_orders/.secrets:/app/.secrets:ro -v /opt/iba_orders/output:/app/output ${var.iba_orders_container_name}:latest"
-          ]
-        }
-      }
-    ]
-  })
+  content = jsonencode(jsondecode(templatefile("${path.module}/templates/ssm_documents/iba_orders_sync.json.tftpl", {
+    aws_region                                       = var.aws_region
+    cloudwatch_system_log_group_name                 = aws_cloudwatch_log_group.ec2_system.name
+    cloudwatch_docker_log_group_name                 = aws_cloudwatch_log_group.ec2_docker.name
+    iba_orders_repo_url                              = var.iba_orders_repo_url
+    iba_orders_repo_ref                              = var.iba_orders_repo_ref
+    iba_orders_env_file_ssm_parameter_name           = var.iba_orders_env_file_ssm_parameter_name
+    iba_orders_api_key_ssm_parameter_name            = var.iba_orders_api_key_ssm_parameter_name
+    iba_orders_store_id                              = var.iba_orders_store_id
+    iba_orders_days_back                             = var.iba_orders_days_back
+    iba_orders_http_timeout_seconds                  = var.iba_orders_http_timeout_seconds
+    iba_orders_google_sheet_id                       = var.iba_orders_google_sheet_id
+    iba_orders_google_worksheet                      = var.iba_orders_google_worksheet
+    iba_orders_google_members_worksheet              = var.iba_orders_google_members_worksheet
+    iba_orders_google_credentials_ssm_parameter_name = var.iba_orders_google_credentials_ssm_parameter_name
+    iba_orders_container_name                        = var.iba_orders_container_name
+  })))
 
   tags = merge(
     var.common_tags,

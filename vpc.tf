@@ -18,8 +18,40 @@ resource "aws_vpc" "prod" {
   )
 }
 
-resource "aws_s3_bucket" "prod_vpc_flow_logs" {
-  bucket = "${var.project_name}-prod-vpc-flow-logs-${data.aws_caller_identity.current.account_id}"
+module "s3_prod_vpc_flow_logs" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "~> 5.11"
+
+  bucket = local.prod_vpc_flow_logs_bucket_name
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+
+  versioning = {
+    status = true
+  }
+
+  server_side_encryption_configuration = {
+    rule = {
+      bucket_key_enabled = true
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = module.kms_terraform_state.key_arn
+      }
+    }
+  }
+
+  logging = {
+    target_bucket = module.s3_terraform_state_logs.s3_bucket_id
+    target_prefix = "prod-vpc-flow-logs-access/"
+  }
+
+  attach_policy = true
+  policy = templatefile("${path.module}/templates/s3_policies/prod_vpc_flow_logs_bucket_policy.json.tftpl", {
+    aws_region = var.aws_region
+  })
 
   tags = merge(
     var.common_tags,
@@ -30,93 +62,9 @@ resource "aws_s3_bucket" "prod_vpc_flow_logs" {
   )
 }
 
-resource "aws_s3_bucket_public_access_block" "prod_vpc_flow_logs" {
-  bucket = aws_s3_bucket.prod_vpc_flow_logs.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_versioning" "prod_vpc_flow_logs" {
-  bucket = aws_s3_bucket.prod_vpc_flow_logs.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "prod_vpc_flow_logs" {
-  bucket = aws_s3_bucket.prod_vpc_flow_logs.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.terraform_state.arn
-    }
-    bucket_key_enabled = true
-  }
-}
-
-resource "aws_s3_bucket_logging" "prod_vpc_flow_logs" {
-  bucket = aws_s3_bucket.prod_vpc_flow_logs.id
-
-  target_bucket = aws_s3_bucket.terraform_state_logs.id
-  target_prefix = "prod-vpc-flow-logs-access/"
-}
-
-resource "aws_s3_bucket_policy" "prod_vpc_flow_logs" {
-  bucket = aws_s3_bucket.prod_vpc_flow_logs.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AWSLogDeliveryAclCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "delivery.logs.amazonaws.com"
-        }
-        Action = [
-          "s3:GetBucketAcl",
-          "s3:ListBucket"
-        ]
-        Resource = aws_s3_bucket.prod_vpc_flow_logs.arn
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-          }
-          ArnLike = {
-            "aws:SourceArn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
-          }
-        }
-      },
-      {
-        Sid    = "AWSLogDeliveryWrite"
-        Effect = "Allow"
-        Principal = {
-          Service = "delivery.logs.amazonaws.com"
-        }
-        Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.prod_vpc_flow_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
-        Condition = {
-          StringEquals = {
-            "s3:x-amz-acl"      = "bucket-owner-full-control"
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-          }
-          ArnLike = {
-            "aws:SourceArn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
-          }
-        }
-      }
-    ]
-  })
-}
-
 resource "aws_flow_log" "prod" {
   log_destination_type = "s3"
-  log_destination      = aws_s3_bucket.prod_vpc_flow_logs.arn
+  log_destination      = module.s3_prod_vpc_flow_logs.s3_bucket_arn
   traffic_type         = "ALL"
   vpc_id               = aws_vpc.prod.id
 

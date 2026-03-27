@@ -1,0 +1,44 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SSMSessionManagerAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssmmessages:AcknowledgeMessage",
+        "ssmmessages:GetEndpoint",
+        "ssmmessages:GetMessages",
+        "ec2messages:GetMessages"
+      ],
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceAccount": "${account_id}"
+        }
+      }
+    },
+    {
+      "Sid": "ReadMongoDBPasswordFromParameterStore",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${aws_region}:${account_id}:parameter${mongodb_password_ssm_parameter_name}",
+        "arn:aws:ssm:${aws_region}:${account_id}:parameter${iba_orders_api_key_ssm_parameter_name}",
+        "arn:aws:ssm:${aws_region}:${account_id}:parameter${iba_orders_env_file_ssm_parameter_name}",
+        "arn:aws:ssm:${aws_region}:${account_id}:parameter${iba_orders_google_credentials_ssm_parameter_name}"
+      ]
+    },
+    {
+      "Sid": "DecryptMongoDBPassword",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt"
+      ],
+      "Resource": "${kms_key_arn}"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Run iba_orders Docker sync job on EC2 bastion host",
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "runIbaOrders",
+      "inputs": {
+        "runCommand": [
+          "set -euo pipefail",
+          "sudo yum install -y git docker amazon-cloudwatch-agent >/dev/null 2>&1 || true",
+          "sudo systemctl enable --now docker",
+          "cat <<'EOF' | sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json >/dev/null",
+          "{",
+          "  \"logs\": {",
+          "    \"logs_collected\": {",
+          "      \"files\": {",
+          "        \"collect_list\": [",
+          "          {\"file_path\": \"/var/log/messages\", \"log_group_name\": \"${cloudwatch_system_log_group_name}\", \"log_stream_name\": \"{instance_id}/messages\", \"timestamp_format\": \"%b %d %H:%M:%S\"},",
+          "          {\"file_path\": \"/var/log/secure\", \"log_group_name\": \"${cloudwatch_system_log_group_name}\", \"log_stream_name\": \"{instance_id}/secure\", \"timestamp_format\": \"%b %d %H:%M:%S\"},",
+          "          {\"file_path\": \"/var/log/cloud-init.log\", \"log_group_name\": \"${cloudwatch_system_log_group_name}\", \"log_stream_name\": \"{instance_id}/cloud-init\"},",
+          "          {\"file_path\": \"/var/log/user-data.log\", \"log_group_name\": \"${cloudwatch_system_log_group_name}\", \"log_stream_name\": \"{instance_id}/user-data\"}",
+          "        ]",
+          "      }",
+          "    }",
+          "  }",
+          "}",
+          "EOF",
+          "sudo systemctl enable amazon-cloudwatch-agent >/dev/null 2>&1 || true",
+          "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s >/dev/null 2>&1 || true",
+          "sudo mkdir -p /opt/iba_orders/.secrets /opt/iba_orders/output",
+          "if [ ! -d /opt/iba_orders/repo/.git ]; then sudo git clone ${iba_orders_repo_url} /opt/iba_orders/repo; fi",
+          "sudo git -C /opt/iba_orders/repo fetch --all --prune",
+          "sudo git -C /opt/iba_orders/repo checkout ${iba_orders_repo_ref}",
+          "sudo git -C /opt/iba_orders/repo reset --hard origin/${iba_orders_repo_ref} || true",
+          "if aws ssm get-parameter --name ${iba_orders_env_file_ssm_parameter_name} --with-decryption --region ${aws_region} --query Parameter.Value --output text >/tmp/iba_orders.env 2>/dev/null && [ -s /tmp/iba_orders.env ]; then sudo cp /tmp/iba_orders.env /opt/iba_orders/repo/.env; else",
+          "API_KEY=$(aws ssm get-parameter --name ${iba_orders_api_key_ssm_parameter_name} --with-decryption --region ${aws_region} --query Parameter.Value --output text)",
+          "cat <<'EOF' | sudo tee /opt/iba_orders/repo/.env >/dev/null",
+          "API_KEY=$${API_KEY}",
+          "STORE_ID=${iba_orders_store_id}",
+          "DAYS_BACK=${iba_orders_days_back}",
+          "HTTP_TIMEOUT_SECONDS=${iba_orders_http_timeout_seconds}",
+          "OUTPUT_FILE=/app/output/iba_squarespace_orders.csv",
+          "GOOGLE_SHEET_ID=${iba_orders_google_sheet_id}",
+          "GOOGLE_WORKSHEET=${iba_orders_google_worksheet}",
+          "GOOGLE_MEMBERS_WORKSHEET=${iba_orders_google_members_worksheet}",
+          "GOOGLE_CREDENTIALS_FILE=/app/.secrets/google_credentials.json",
+          "EOF",
+          "fi",
+          "sudo sed -i '/^GOOGLE_CREDENTIALS_FILE=/d' /opt/iba_orders/repo/.env",
+          "echo 'GOOGLE_CREDENTIALS_FILE=/app/.secrets/google_credentials.json' | sudo tee -a /opt/iba_orders/repo/.env >/dev/null",
+          "if aws ssm get-parameter --name ${iba_orders_google_credentials_ssm_parameter_name} --with-decryption --region ${aws_region} --query Parameter.Value --output text >/tmp/google_credentials.json 2>/dev/null; then sudo cp /tmp/google_credentials.json /opt/iba_orders/.secrets/google_credentials.json && sudo chmod 600 /opt/iba_orders/.secrets/google_credentials.json; fi",
+          "sudo docker build -t ${iba_orders_container_name}:latest /opt/iba_orders/repo",
+          "sudo docker run --rm --name ${iba_orders_container_name} --log-driver awslogs --log-opt awslogs-region=${aws_region} --log-opt awslogs-group=${cloudwatch_docker_log_group_name} --log-opt awslogs-stream=${iba_orders_container_name} --env-file /opt/iba_orders/repo/.env -v /opt/iba_orders/.secrets:/app/.secrets:ro -v /opt/iba_orders/output:/app/output ${iba_orders_container_name}:latest"
+        ]
+      }
+    }
+  ]
+}

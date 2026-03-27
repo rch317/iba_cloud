@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "[pre-commit] terraform fmt"
+terraform fmt -recursive .
+git add -- '*.tf'
+git add -- '*.tfvars' 2>/dev/null || true
+
+echo "[pre-commit] tflint"
+tflint
+
+if command -v trivy >/dev/null 2>&1; then
+	echo "[pre-commit] trivy config"
+	trivy config --severity HIGH,CRITICAL --skip-dirs .terraform .
+elif command -v tfsec >/dev/null 2>&1; then
+	echo "[pre-commit] tfsec"
+	tfsec
+else
+	echo "Neither trivy nor tfsec is installed. Install one of them to continue." >&2
+	exit 1
+fi
+
+echo "[pre-commit] terraform validate"
+terraform validate
+
+echo "[pre-commit] terraform-docs"
+scripts/update-terraform-docs.sh
+
+git add docs/terraform-docs.md
